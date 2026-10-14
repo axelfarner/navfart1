@@ -16,11 +16,34 @@ h = 0.1;                % Sampling time (s)
 psi_ref = 10 * pi/180;  % desired yaw angle (rad)
 u_ref   = 7;            % desired surge speed (m/s)
 
-% initial states
+% step response maneuver
+%   'rudder'    : rudder step from 0 to delta_1, propeller speed fixed at n_0
+%   'propeller' : propeller step from n_0 to n_1, rudder fixed at 0
+maneuver = 'propeller';
+t_step   = 100;             % time of step (s)
+delta_1  = 5 * pi/180;      % rudder angle command after step (rad)
+n_0      = 1;               % propeller speed command before step (rps)
+n_1      = 5;              % propeller speed command after step (rps)
+
+% time-varying input commands delta_c(t) (rad) and n_c(t) (rps)
+switch maneuver
+    case 'rudder'
+        delta_c_fun = @(t) delta_1 * (t >= t_step);
+        n_c_fun     = @(t) n_0;
+    case 'propeller'
+        delta_c_fun = @(t) 0;
+        n_c_fun     = @(t) n_0 + (n_1 - n_0) * (t >= t_step);
+    otherwise
+        error('Unknown maneuver: %s', maneuver);
+end
+
+% initial states: steady straight-line motion at propeller speed n_0,
+% found as the surge speed where the surge acceleration is zero
+u_0 = fzero(@(u) [1 0 0 0 0 0 0 0] * ship([u 0 0 0 0 0 0 n_0]', [0 n_0]'), u_ref);
 eta = [0 0 0]';
-nu  = [0 0 0]';
+nu  = [u_0 0 0]';
 delta = 0;
-n = 0;
+n = n_0;
 x = [nu' eta' delta n]';
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -38,10 +61,10 @@ for i = 1:nTimeSteps
     r_d_deg = 0;
     u_d = u_ref;
         
-    % control law
-    delta_c = 0.1;              % rudder angle command (rad)
-    n_c = 10;                   % propeller speed (rps)
-    
+    % control law: time-varying input commands
+    delta_c = delta_c_fun(t(i));    % rudder angle command (rad)
+    n_c = n_c_fun(t(i));            % propeller speed command (rps)
+
     % ship dynamics
     u = [delta_c n_c]';
     xdot = ship(x,u);
@@ -78,9 +101,9 @@ y           = simdata(:,5);                 % m
 psi         = simdata(:,6);                 % rad
 psi_deg     = (180/pi) * psi;               % deg
 delta_deg   = (180/pi) * simdata(:,7);      % deg
-n           = (30/pi) * simdata(:,8);       % rpm
+n           = 60 * simdata(:,8);            % rpm
 delta_c_deg = (180/pi) * simdata(:,9);      % deg
-n_c         = (30/pi) * simdata(:,10);      % rpm
+n_c         = 60 * simdata(:,10);           % rpm
 u_d         = simdata(:,11);                % m/s
 psi_d       = simdata(:,12);                % rad
 psi_d_deg   = (180/pi) * psi_d;             % deg
