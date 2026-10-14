@@ -100,9 +100,46 @@ CRB = CA + CRB;
 % Add linear damping here
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+T_1 = 20;
+T_2 = 20;
+T_6 = 10;
+
+X_u = -(m -Xudot)/T_1;
+Y_v = -(m -Yvdot)/T_2;
+N_r = -(Iz -Nrdot)/T_6;
+
+D = - diag([X_u, Y_v, N_r]);
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Add nonlinear damping here
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+nu_kin = 1e-6;
+k  = 0.1;
+u_r = nu(1);
+CR = 0;
+nabla = m / rho;
+S = 1.7*L*T + nabla/T;
+
+Rn = L * abs(u_r) / nu_kin;
+Cf = 0.075 / (log10(max(Rn, 1e3)) - 2)^2 + CR;
+
+Xcf = -0.5 * rho * S * (1 + k) * Cf * abs(u_r) * u_r;
+
+
+v_r = nu(2);
+r   = nu(3);
+Cd_2D = Hoerner(B,T);
+Ycf = 0;
+Ncf = 0;
+
+% Strip theory: cross−flow drag integrals
+dx = L/10; % 10 strips
+for xL = -L/2:dx:L/2
+    Ucf = abs(v_r + xL * r) * (v_r + xL * r);
+    Ycf = Ycf - 0.5 * rho * T * Cd_2D * Ucf * dx; % sway force
+    Ncf = Ncf - 0.5 * rho * T * Cd_2D * xL * Ucf * dx; % yaw moment
+end
 
 R = Rzyx(0,0,eta(3));
 
@@ -112,7 +149,7 @@ thr = rho * Dia^4 * KT * abs(n) * n;    % thrust command (N)
 % ship dynamics
 u = [ thr delta ]';
 tau = Bi * u;
-nu_dot = Minv * (tau - CRB * nu); 
+nu_dot = Minv * (tau - CRB * nu - D * nu + [Xcf; Ycf; Ncf]); 
 eta_dot = R * nu;    
 
 % Rudder saturation and dynamics (Sections 9.5.2)
