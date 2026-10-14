@@ -58,12 +58,18 @@ Nrdot = -2.4283e10;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Add added mass here
+
+% Added added mass matrix MA
+MA = - [Xudot 0 0;
+    0 Yvdot Yrdot
+    0 Nvdot Nrdot];
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 % rigid-body mass matrix
 MRB = [ m 0    0 
         0 m    m*xg
         0 m*xg Iz ];
+MRB = MRB + MA;
 Minv = invQR(MRB);
 
 % input matrix
@@ -82,6 +88,12 @@ CRB = m * nu(3) * [ 0 -1 -xg
                 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Add Coriolis due to added mass here
+
+% Added Coriolis matrix
+CA = [0 0 (Yvdot*nu(2) + Yrdot * nu(3));
+    0 0 -(Xudot *nu(1));
+    -(Yvdot * nu(2) + Yrdot * nu(3)) (Xudot * nu(1)) 0];
+CRB = CA + CRB;
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
