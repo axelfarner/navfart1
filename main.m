@@ -10,7 +10,7 @@ addpath(genpath('flypath3d_v3'))
 % USER INPUTS
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 clc; clear; close all;
-T_final = 1000;	        % Final simulation time (s)
+T_final = 2500;	        % Final simulation time (s)
 h = 0.1;                % Sampling time (s)
 
 psi_ref = 10 * pi/180;  % desired yaw angle (rad)
@@ -36,15 +36,44 @@ for i = 1:nTimeSteps
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     % Part 2, 1a) Add current here 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    uc = 0;
-    vc = 0;
+    Vc = 1; % current speed (m/s)
+    betaVc = 45 * pi/180; % current direction (rad)
+    uc = Vc * cos(betaVc - x(6));
+    vc = Vc * sin(betaVc - x(6));
     nu_c = [ uc vc 0 ]';
     
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%
     % Part 2, 1c) Add wind here 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    Ywind = 0;
-    Nwind = 0;
+    beta_Vw = 135 * pi/180; % wind direction (rad)
+    Vw = 10; % wind speed (m/s)
+    rho_air = 1.247; % air density (kg/m^3)
+    c_y = 0.95;
+    c_n = 0.15;
+    L_oa = 161; % length overall (m)
+    A_Lw = 10 * L_oa; % lateral projected area (m^2)
+
+    if t(i) >= 200
+        % wind velocity in body frame
+        uw = Vw * cos(beta_Vw - x(6));
+        vw = Vw * sin(beta_Vw - x(6));
+
+        % ship velocity relative to the air
+        u_rw = x(1) - uw;
+        v_rw = x(2) - vw;
+        V_rw = sqrt(u_rw^2 + v_rw^2); % relative wind speed (m/s)
+        gamma_rw = -atan2(v_rw, u_rw); % wind angle of attack (rad)
+
+        % wind coefficients for symmetrical ships, eqs. (10.22-10.23)
+        Cy = c_y * sin(gamma_rw);
+        Cn = c_n * sin(2*gamma_rw);
+
+        Ywind = 0.5 * rho_air * V_rw^2 * Cy * A_Lw;
+        Nwind = 0.5 * rho_air * V_rw^2 * Cn * A_Lw * L_oa;
+    else
+        Ywind = 0;
+        Nwind = 0;
+    end
     tau_wind = [0 Ywind Nwind]';
     
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -57,6 +86,9 @@ for i = 1:nTimeSteps
     % psi_d = xd(1);
     % r_d = xd(2);
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+    w_b = 0.06; % bandwidth (rad/s)
+    zeta = 0.7; % damping ratio (-)
+    
     psi_d = psi_ref;
     r_d = 0;
     u_d = U_ref;
@@ -183,3 +215,19 @@ flypath('flypath3d_v3/ship1.mat',...
 'xlim', [min(y)-0.1*max(abs(y)),max(y)+0.1*max(abs(y))],... 
 'ylim', [min(x)-0.1*max(abs(x)),max(x)+0.1*max(abs(x))], ...
 'zlim', [-max(max(abs(x)),max(abs(y)))/100,max(max(abs(x)),max(abs(y)))/20]); 
+%% Crab and sideslip angles
+% current in body frame (recomputed from logged heading)
+uc_log = Vc * cos(betaVc - psi);
+vc_log = Vc * sin(betaVc - psi);
+u_r = u - uc_log;
+v_r = v - vc_log;
+U_r = sqrt(u_r.^2 + v_r.^2);
+
+beta_c_deg = (180/pi) * atan2(v, u);      % crab angle
+beta_deg   = (180/pi) * asin(v_r ./ U_r); % sideslip angle
+
+figure(4)
+figure(gcf)
+plot(t,beta_c_deg,t,beta_deg,'linewidth',2);
+title('Crab and sideslip angles'); xlabel('Time (s)'); ylabel('Angle (deg)');
+legend('crab angle \beta_c','sideslip angle \beta')
