@@ -1,6 +1,6 @@
-function xdot = ship(x,u)
-% xdot = ship(x,u) returns the time derivative of the state vector: 
-% x = [ u v r x y psi delta n ]' for a ship with L = 161 m where:
+function [xdot,y] = ship(x,u,nu_c,tau_ext)
+% [xdot,y] = ship(x,u) returns the time derivative of the state vector: 
+% x = [ u v r x y psi delta n Qm ]' for a ship with L = 161 m where:
 %
 % u     = surge velocity, must be positive  (m/s)    
 % v     = sway velocity                     (m/s)
@@ -9,7 +9,8 @@ function xdot = ship(x,u)
 % y     = position in y-direction           (m)
 % psi   = yaw angle                         (rad)
 % delta = actual rudder angle               (rad)
-% n     = actual shaft velocity             (rps)
+% n     = actual shaft velocity             (rpm)
+% Qm    = torque produced by the engine     (Nm)
 % 
 % The input vector is :
 %
@@ -17,6 +18,14 @@ function xdot = ship(x,u)
 %
 % delta_c = commanded rudder angle          (rad)
 % n_c     = commanded shaft velocity        (rpm)
+%
+% The output vector is :
+%
+% y       = [ X Y N ]'  where
+%
+% X = total body frame force along the x axis  (N)
+% Y = total body frame force along the y axis  (N)
+% N = total body frame moment about the z axis (Nm)
 %
 % Author:    name
 % Date:      date
@@ -34,6 +43,10 @@ eta   = x(4:6);
 delta = x(7);
 n     = x(8); 
 
+nu_r = nu - nu_c;
+uc = nu_c(1);
+vc = nu_c(2);
+
 % ship parameters 
 m = 17.0677e6;          % mass (kg)
 Iz = 2.1732e10;         % yaw moment of inertia (kg m^2)
@@ -45,6 +58,18 @@ KT = 0.7;               % propeller coefficient (-)
 Dia = 3.3;              % propeller diameter (m)
 rho = 1025;             % density of water (m/s^3)
 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Part 2, 3a) Compute new propeller thrust and torque coefficients here
+% use the wageningen() function, with correct inputs
+%
+% The result should look like this:
+% [KT,KQ] = wageningen(...);
+% You only need to run it once. Either implement some logic with 
+% persistent variables or set the obtained values manually. 
+% KT = ...;
+% KQ = ...;
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
 % rudder limitations
 delta_max  = 40 * pi/180;        % max rudder angle      (rad)
 Ddelta_max = 5  * pi/180;        % max rudder derivative (rad/s)
@@ -55,102 +80,88 @@ Yvdot = -5.1996e6;
 Yrdot =  9.3677e5;
 Nvdot =  Yrdot;
 Nrdot = -2.4283e10;
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% Add added mass here
-
-% Added added mass matrix MA
-MA = - [Xudot 0 0;
-    0 Yvdot Yrdot
-    0 Nvdot Nrdot];
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+MA = -[ Xudot 0 0; 0 Yvdot Yrdot; 0 Nvdot Nrdot ];
 
 % rigid-body mass matrix
 MRB = [ m 0    0 
         0 m    m*xg
         0 m*xg Iz ];
-MRB = MRB + MA;
-Minv = invQR(MRB);
+Minv = invQR(MRB + MA);
+
+% rudder coefficients
+b = 2;
+AR = 8;
+CB = 0.8;
+
+lambda = b^2 / AR;
+tR = 0.45 - 0.28*CB;
+CN = 6.13*lambda / (lambda + 2.25);
+aH = 0.75;
+xH = -0.4 * L;
+xR = -0.5 * L;
 
 % input matrix
-t_thr = 0.05;           % thrust deduction number
-X_delta2 = 0;         % rudder coefficients (Section 9.5)
-Y_delta = 0;      
-N_delta = -1e7;
-Bi = [ (1-t_thr) X_delta2
-        0        Y_delta
-        0        N_delta  ];
+t_thr = 0.05;                                        % thrust deduction number
+X_delta2 = 0.5 * (1 - tR) * rho * AR * CN;           % rudder coefficients (Section 9.5)
+Y_delta = 0.25 * (1 + aH) * rho * AR * CN; 
+N_delta = 0.25 * (xR + aH*xH) * rho * AR * CN;   
+
+Bi = @(u_r,delta) [ (1-t_thr)  -u_r^2 * X_delta2 * delta
+                        0      -u_r^2 * Y_delta
+                        0      -u_r^2 * N_delta            ];
     
 % state-dependent time-varying matrices
-CRB = m * nu(3) * [ 0 -1 -xg 
-                    1  0  0 
-                    xg 0  0  ];
-                
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% Add Coriolis due to added mass here
+CRB = m * nu_r(3) * [ 0 -1 -xg 
+                      1  0  0 
+                      xg 0  0  ];
 
-% Added Coriolis matrix
-CA = [0 0 (Yvdot*nu(2) + Yrdot * nu(3));
-    0 0 -(Xudot *nu(1));
-    -(Yvdot * nu(2) + Yrdot * nu(3)) (Xudot * nu(1)) 0];
-CRB = CA + CRB;
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+CA = [ 0 0 Yvdot*nu_r(2) + Yrdot*nu_r(3); 0 0 -Xudot*nu_r(1); -Yvdot*nu_r(2)-Yrdot*nu_r(3) Xudot*nu_r(1) 0];
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% Add linear damping here
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% linear damping
+T1 = 20; T2 = 20; T6 = 10;
+Xu = -(m-Xudot)/T1;
+Yv = -(m-Yvdot)/T2;
+Nr = -(Iz-Nrdot)/T6;
+D = -diag([Xu Yv Nr]);
 
-T_1 = 20;
-T_2 = 20;
-T_6 = 10;
-
-X_u = -(m -Xudot)/T_1;
-Y_v = -(m -Yvdot)/T_2;
-N_r = -(Iz -Nrdot)/T_6;
-
-D = - diag([X_u, Y_v, N_r]);
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% Add nonlinear damping here
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-nu_kin = 1e-6;
-k  = 0.1;
-u_r = nu(1);
+% nonlinear surge damping
+eps = 0.001;
 CR = 0;
-nabla = m / rho;
-S = 1.7*L*T + nabla/T;
+k = 0.1;
+S = B*L + 2*T*(B+L);
+v = 1e-6;
+Rn = L / v * abs(nu_r(1));
+Cf = 0.075 / (log10(Rn) - 2 + eps)^2 + CR;
+Xns = -0.5*rho*S*(1+k)*Cf*abs(nu_r(1))*nu_r(1);
 
-Rn = L * abs(u_r) / nu_kin;
-Cf = 0.075 / (log10(max(Rn, 1e3)) - 2)^2 + CR;
-
-Xcf = -0.5 * rho * S * (1 + k) * Cf * abs(u_r) * u_r;
-
-
-v_r = nu(2);
-r   = nu(3);
-Cd_2D = Hoerner(B,T);
-Ycf = 0;
-Ncf = 0;
-
-% Strip theory: cross−flow drag integrals
-dx = L/10; % 10 strips
+% nonlinear cross-flow drag
+Cd_2d = Hoerner(B,T);
+dx = L/10;
+Ycf = 0; Ncf = 0;
 for xL = -L/2:dx:L/2
-    Ucf = abs(v_r + xL * r) * (v_r + xL * r);
-    Ycf = Ycf - 0.5 * rho * T * Cd_2D * Ucf * dx; % sway force
-    Ncf = Ncf - 0.5 * rho * T * Cd_2D * xL * Ucf * dx; % yaw moment
+Ucf = abs(nu_r(2) + xL * nu_r(3)) * (nu_r(2) + xL * nu_r(3));
+Ycf = Ycf - 0.5 * rho * T * Cd_2d * Ucf * dx;
+Ncf = Ncf - 0.5 * rho * T * Cd_2d * xL * Ucf * dx;
 end
+d = -[Xns Ycf Ncf]';
 
-R = Rzyx(0,0,eta(3));
-
-% thrust 
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Part 2, 3c) compute thrust and torque here
+%
+% thr = ....
+% Q = ....
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 thr = rho * Dia^4 * KT * abs(n) * n;    % thrust command (N)
 
 % ship dynamics
+R = Rzyx(0,0,eta(3));
 u = [ thr delta ]';
-tau = Bi * u;
-nu_dot = Minv * (tau - CRB * nu - D * nu + [Xcf; Ycf; Ncf]); 
+tau = Bi(nu_r(1),delta) * u;
+nu_dot = [nu(3)*vc -nu(3)*uc 0]' + Minv * (tau_ext + tau - (CRB + CA + D) * nu_r - d);
 eta_dot = R * nu;    
+
+% total body frame forces and moments in 3-DoF [X(N), Y(N), N(Nm)] (Section 3.3.1, eq. 3.47)
+tau_total = tau_ext + tau - d;
 
 % Rudder saturation and dynamics (Sections 9.5.2)
 if abs(delta_c) >= delta_max
@@ -162,9 +173,14 @@ if abs(delta_dot) >= Ddelta_max
     delta_dot = sign(delta_dot)*Ddelta_max;
 end    
 
-% propeller dynamics
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Part 2, 3b,3c) compute torque-based shaft dynamics here
+%
+% the result should look like this:
+% n_dot =  .... (computed as function of torque)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 n_dot = (1/10) * (n_c - n);
 
 xdot = [nu_dot' eta_dot' delta_dot n_dot]';
-
+y = tau_total;
 end
