@@ -35,8 +35,8 @@ Nr = -(Iz-Nrdot)/T6;
 D = -diag([Yv Nr]);
 
 % rigid-body mass matrix
-MRB = [ m    m*xg
-        m*xg Iz ];
+MRB = [ m    m*x_g
+        m*x_g Iz ];
 Minv = invQR(MRB + MA);
 
 Y_delta = 0.25 * (1 + aH) * rho * AR * CN; 

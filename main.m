@@ -10,10 +10,10 @@ addpath(genpath('flypath3d_v3'))
 % USER INPUTS
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 clc; clear; close all;
-T_final = 2500;	        % Final simulation time (s)
+T_final = 1500;	        % Final simulation time (s)
 h = 0.1;                % Sampling time (s)
 
-psi_ref = 10 * pi/180;  % desired yaw angle (rad)
+
 U_ref   = 7;            % desired surge speed (m/s)
 
 % initial states
@@ -30,6 +30,32 @@ t = 0:h:T_final;                % Time vector
 nTimeSteps = length(t);         % Number of time steps
 
 simdata = zeros(nTimeSteps, 13); % Pre-allocate matrix for efficiency
+
+e_int = 0; % integral term of error in yaw
+xd = [x(6) x(3) 0]'; % initialize desired yaw and yawrate to be same as starting position
+
+% compute Ki to use for anti integrator windup term
+wb = 0.06;
+zeta = 1;
+wn = wb / sqrt(1 - 2*zeta + sqrt(4*zeta^4 - 4*zeta^2 + 2));
+T = 269.56;
+K = 0.0075;
+Ki = wn ^3 * T / (10 * K);
+
+% numerator and denomintar in transfer function for reference model
+wn_refmodel = 0.03;
+num = wn_refmodel^3;
+den = [1 (wn_refmodel+2*zeta*wn_refmodel) (wn_refmodel^2 + 2*zeta*wn_refmodel^2) wn_refmodel^3];    
+n = length(den) - 1; % system order
+
+% Construct Companion Form as state-space representation of reference model:
+A = [zeros(n-1, 1), eye(n-1);
+     -fliplr(den(2:end))];
+ 
+B = [zeros(n-1, 1); num(end)];
+
+% ref model returns the first order approx of the increment xd, xd_dot
+ref_model = @(xd, r) (A * xd + B * r) *h;
 
 for i = 1:nTimeSteps
     
@@ -79,28 +105,28 @@ for i = 1:nTimeSteps
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     % Part 2, 2d) Add a reference model here 
     % Define it as a function
-    % check eq. (15.143) in (Fossen, 2021) for help
-    %
-    % The result should look like this:
-    % xd_dot = ref_model(xd,psi_ref(i));
-    % psi_d = xd(1);
-    % r_d = xd(2);
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    w_b = 0.06; % bandwidth (rad/s)
-    zeta = 0.7; % damping ratio (-)
-    
-    psi_d = psi_ref;
-    r_d = 0;
+    xd_dot = ref_model(xd, psi_ref(i));
+    xd = xd + xd_dot;
+
+    psi_d = xd(1);
+    r_d = xd(2);
     u_d = U_ref;
     
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     % Part 2, 2d) Add the heading controller here 
     % Define it as a function
-    %
-    % The result should look like this:
-    % delta_c = PID_heading(e_psi,e_r,e_int);
+    
+    % to prevent integrator windup, stop integrating when integral term alone puts you over rudder limitations
+    integrator_increment = h * (psi_d- x(6));
+    if abs(1.1 * (e_int + integrator_increment) * Ki) < 40 * pi/180
+        e_int = e_int + integrator_increment;
+    end
+    e_r = r_d - x(3);
+    e_psi = psi_d - x(6);
+
+    delta_c = PID_heading(e_psi,e_r,e_int);
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    delta_c = 0.1;              % rudder angle command (rad)
 
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     % Part 2, 3e) Add open loop speed control here
