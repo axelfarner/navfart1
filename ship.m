@@ -31,7 +31,7 @@ function [xdot,y] = ship(x,u,nu_c,tau_ext)
 % Date:      date
 
 % Check of input and state dimensions
-if (length(x)~= 8),error('x-vector must have dimension 8 !');end
+if (length(x)~= 9),error('x-vector must have dimension 9 !');end
 if (length(u)~= 2),error('u-vector must have dimension 2 !');end
 
 % Dimensional states and input
@@ -41,7 +41,8 @@ n_c     = u(2);
 nu    = x(1:3);
 eta   = x(4:6);
 delta = x(7);
-n     = x(8); 
+n     = x(8);
+Qm    = x(9);
 
 nu_r = nu - nu_c;
 uc = nu_c(1);
@@ -54,7 +55,6 @@ xg = -3.7;              % CG x-ccordinate (m)
 L = 161;                % length (m)
 B = 21.8;               % beam (m)
 T = 8.9;                % draft (m)
-KT = 0.7;               % propeller coefficient (-)
 Dia = 3.3;              % propeller diameter (m)
 rho = 1025;             % density of water (m/s^3)
 
@@ -69,6 +69,16 @@ rho = 1025;             % density of water (m/s^3)
 % KT = ...;
 % KQ = ...;
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+persistent KT_pers KQ_pers
+if isempty(KT_pers)
+    Ja   = 0;       % advance number (bollard pull)
+    PD   = 1.5;     % pitch/diameter ratio
+    AEAO = 0.65;    % blade area ratio
+    z    = 4;       % number of propeller blades
+    [KT_pers,KQ_pers] = wageningen(Ja,PD,AEAO,z);
+end
+KT = KT_pers;
+KQ = KQ_pers;
 
 % rudder limitations
 delta_max  = 40 * pi/180;        % max rudder angle      (rad)
@@ -151,7 +161,14 @@ d = -[Xns Ycf Ncf]';
 % thr = ....
 % Q = ....
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+Im = 100000; % inertia of the motor (kg m^2)
+Km = 0.6; % (s^-1)
+Tm = 10; % (s)
+
+
 thr = rho * Dia^4 * KT * abs(n) * n;    % thrust command (N)
+Q = rho * Dia^5 * KQ * abs(n) * n;      % torque command (Nm)
+
 
 % ship dynamics
 R = Rzyx(0,0,eta(3));
@@ -179,8 +196,12 @@ end
 % the result should look like this:
 % n_dot =  .... (computed as function of torque)
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-n_dot = (1/10) * (n_c - n);
+Qf = 0;                                     % friction torque (Nm)
+Qd = rho * Dia^5 * KQ * abs(n_c) * n_c;     % desired torque (Nm)
+Y = Qd / Km;                                % engine input
+Qm_dot = (1/Tm) * (Km * Y - Qm);            % engine dynamics, H(s) with tau = 0
+n_dot = (1/Im) * (Qm - Q - Qf);             % shaft dynamics
 
-xdot = [nu_dot' eta_dot' delta_dot n_dot]';
+xdot = [nu_dot' eta_dot' delta_dot n_dot Qm_dot];
 y = tau_total;
 end

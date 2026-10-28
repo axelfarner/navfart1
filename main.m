@@ -21,7 +21,8 @@ eta_0 = [0 0 0]';
 nu_0  = [0 0 0]';
 delta_0 = 0;
 n_0 = 0;
-x = [nu_0' eta_0' delta_0 n_0]'; % The state vector can be extended with addional states here
+Qm_0 = 0;
+x = [nu_0' eta_0' delta_0 n_0, Qm_0]'; % The state vector can be extended with addional states here
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % MAIN LOOP
