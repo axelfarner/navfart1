@@ -37,7 +37,6 @@ if (length(u)~= 2),error('u-vector must have dimension 2 !');end
 % Dimensional states and input
 delta_c = u(1); 
 n_c     = u(2);
-
 nu    = x(1:3);
 eta   = x(4:6);
 delta = x(7);
@@ -175,7 +174,7 @@ R = Rzyx(0,0,eta(3));
 u = [ thr delta ]';
 tau = Bi(nu_r(1),delta) * u;
 nu_dot = [nu(3)*vc -nu(3)*uc 0]' + Minv * (tau_ext + tau - (CRB + CA + D) * nu_r - d);
-eta_dot = R * nu;    
+eta_dot = R * nu;  
 
 % total body frame forces and moments in 3-DoF [X(N), Y(N), N(Nm)] (Section 3.3.1, eq. 3.47)
 tau_total = tau_ext + tau - d;
@@ -202,6 +201,6 @@ Y = Qd / Km;                                % engine input
 Qm_dot = (1/Tm) * (Km * Y - Qm);            % engine dynamics, H(s) with tau = 0
 n_dot = (1/Im) * (Qm - Q - Qf);             % shaft dynamics
 
-xdot = [nu_dot' eta_dot' delta_dot n_dot Qm_dot];
+xdot = [nu_dot' eta_dot' delta_dot n_dot Qm_dot]';
 y = tau_total;
 end

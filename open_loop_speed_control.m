@@ -9,10 +9,10 @@ function n = open_loop_speed_control(U_ref)
     m = 17.0677e6;          % mass (kg)
     T1 = 20;
     Xudot = -8.9830e5;
-    Xu = -(m-Xudot)/T1
+    Xu = -(m-Xudot)/T1;
     t = 0.05;
-    T_d = U_ref * Xu / (t - 1)
+    T_d = U_ref * Xu / (t - 1);
     
-    n = sqrt(T_d / (rho * KT * D ^4))
+    n = sqrt(T_d / (rho * KT * D ^4));
 
 end

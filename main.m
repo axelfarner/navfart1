@@ -14,7 +14,8 @@ T_final = 1500;	        % Final simulation time (s)
 h = 0.1;                % Sampling time (s)
 
 
-U_ref   = 7;            % desired surge speed (m/s)
+U_ref   = 9;            % desired surge speed (m/s)
+print = true;
 
 % initial states
 eta_0 = [0 0 0]';
@@ -136,17 +137,12 @@ for i = 1:nTimeSteps
     % The result should look like this:
     % n_c = open_loop_speed_control(U_ref);
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    n_c = 10;                   % propeller speed [radians per second (rps)]
-
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    % Part 2, 3f) Replace the open loop speed controller, 
-    % with a closed loop speed controller here 
-    % Define it as a function
-    %
-    % The result should look like this:
-    % n_c = closed_loop_speed_control(u_d,e_u,e_int_u);
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    
+    n_c = open_loop_speed_control(U_ref);                   % propeller speed [radians per second (rps)]
+    if print
+        n_c
+        print = false;
+    end
+    delta_c = 0;
     % ship dynamics
     u = [delta_c n_c]';
     [xdot,tau_total] = ship(x,u,nu_c,tau_wind);
