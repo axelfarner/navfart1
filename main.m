@@ -13,6 +13,12 @@ clc; clear; close all;
 T_final = 6800;	        % Final simulation time (s)
 h = .1;                % Sampling time (s)
 
+Rd = (.5 * pi / 180)^2; % measurement noise
+qr = 1e-5;
+qb = 1e-3;
+Qd = diag([qr, qb]);
+x_hat = [(-110 * pi / 180) 0 0]';
+P_hat = diag([.1,.01,.1]);
 
 U_ref   = 9;            % desired surge speed (m/s)
 print = true;
@@ -28,10 +34,16 @@ x = [nu_0' eta_0' delta_0 n_0, Qm_0]'; % The state vector can be extended with a
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % MAIN LOOP
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+[Ad, Bd, Ed, Cd] = get_discrete_matrices();
+
 t = 0:h:T_final;                % Time vector
 nTimeSteps = length(t);         % Number of time steps
 
-simdata = zeros(nTimeSteps, 15); % Pre-allocate matrix for efficiency
+simdata = zeros(nTimeSteps, 18); % Pre-allocate matrix for efficiency
+rng(27); % seed the noise
+noise = [normrnd(0,.5,nTimeSteps,1), normrnd(0,.1,nTimeSteps,1)];
+noise = noise * (pi / 180); % convert noise to radians
 
 e_int = 0; % integral term of error in yaw
 y_int = 0; %integral term of error in course
@@ -124,20 +136,20 @@ for i = 1:nTimeSteps
     %%%%%%%%%%%%%%%%%%%%%%
     % 2 c
     %%%%%%%%%%%%%%%%%%%%%%
-%     chi_d = guidance(e_y,pi_h); 
-%     crab_angle = atan2(x(2), x(1));      % crab angle
-%     if x(1) > 0.7 * U_ref % check that the boat is at about cruise speed to ensure crab angle well defined
-%         heading_d = chi_d - crab_angle;
-%     else
-%         heading_d = chi_d;
-%     end
+    chi_d = guidance(e_y,pi_h); 
+    crab_angle = atan2(x(2), x(1));      % crab angle
+    if x(1) > 0.7 * U_ref % check that the boat is at about cruise speed to ensure crab angle well defined
+        heading_d = chi_d - crab_angle;
+    else
+        heading_d = chi_d;
+    end
     
     %%%%%%%%%%%%%%%%&&&&
     % 2 d
     %%%%%%%%%%%%%%%%%&&&
-    [chi_d, dy]= guidance_integrator(e_y,pi_h,h,y_int);
-    y_int = y_int + dy;
-    heading_d = chi_d;
+%     [chi_d, dy]= guidance_integrator(e_y,pi_h,h,y_int);
+%     y_int = y_int + dy;
+%     heading_d = chi_d;
 
     %%%%%%%%%%%%%%%%%%%%
     % Reference models
@@ -149,19 +161,25 @@ for i = 1:nTimeSteps
     psi_d = xd(1);
     r_d = xd(2);
     u_d = U_ref;
-    
+    %%%%%%%%%%%%%%%%%%%%%%%
+    % KALMAN FILTER
+    %%%%%%%%%%%%%%%%%%%%%%%
 
+    % predict the current state of x
+    if i > 1
+        [x_hat, P_hat] = KF(x_hat, P_hat, x(6) + noise(i,1),delta_c,Ad,Bd,Cd,Ed,Qd,Rd);
+    end
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     % Part 2, 2d) Add the heading controller here 
     % Define it as a function   
     
     % to prevent integrator windup, stop integrating when integral term alone puts you over rudder limitations
-    integrator_increment = h * (psi_d- x(6));
+    integrator_increment = h * (psi_d- x(6)) * 0;
     if abs(1.1 * (e_int + integrator_increment) * Ki) < 40 * pi/180
         e_int = e_int + integrator_increment;
     end
-    e_r = r_d - x(3);
-    e_psi = psi_d - x(6);
+    e_r = r_d - x_hat(2);
+    e_psi = psi_d - x_hat(1);
 
     delta_c = PID_heading(e_psi,e_r,e_int);
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -179,7 +197,7 @@ for i = 1:nTimeSteps
     [xdot,tau_total] = ship(x,u,nu_c,tau_wind);
     
     % store simulation data in a table (for testing)
-    simdata(i,:) = [x(1:3)' x(4:6)' x(7) x(8) u(1) u(2) u_d psi_d r_d chi_d e_y];     
+    simdata(i,:) = [x(1:3)' x(4:6)' x(7) x(8) u(1) u(2) u_d psi_d r_d chi_d e_y x_hat'];     
  
     % Euler integration
     % x = euler2(xdot,x,h); 
@@ -355,3 +373,75 @@ xlabel('Time (s)');
 ylabel('Error (m)');
 title('Cross-Track Error (e_y)');
 legend('e_y', 'Zero Reference', 'Location', 'best');
+
+%% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Problem 4(a): True vs. Noisy Yaw Angle and Yaw Rate
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Truncate pre-generated noise to match actual simulation length
+noise_used = noise(1:length(t), :);
+
+% Add zero-mean Gaussian noise (in deg and deg/s) to true states
+psi_meas_deg = psi_deg + noise_used(:, 1) * 180 / pi;   % std = 0.5 deg
+r_meas_deg   = r_deg   + noise_used(:, 2) * 180 / pi;   % std = 0.1 deg/s
+
+figure(6);
+clf;
+
+% Subplot 1: Yaw Angle (True vs. Noisy Measurement)
+subplot(2, 1, 1);
+plot(t, psi_meas_deg, 'Color', [0.7 0.7 0.7], 'LineWidth', 1); hold on;
+plot(t, psi_deg, 'b', 'LineWidth', 1.5);
+grid on;
+xlabel('Time (s)');
+ylabel('Angle (deg)');
+title('Yaw Angle (\psi): True State vs. Noisy Measurement');
+legend('\psi_{meas} (noisy)', '\psi (true)', 'Location', 'best');
+
+% Subplot 2: Yaw Rate (True vs. Noisy Measurement)
+subplot(2, 1, 2);
+plot(t, r_meas_deg, 'Color', [0.7 0.7 0.7], 'LineWidth', 1); hold on;
+plot(t, r_deg, 'r', 'LineWidth', 1.5);
+grid on;
+xlabel('Time (s)');
+ylabel('Yaw Rate (deg/s)');
+title('Yaw Rate (r): True State vs. Noisy Measurement');
+legend('r_{meas} (noisy)', 'r (true)', 'Location', 'best');
+
+%% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Problem 4(b): Kalman Filter State Estimates vs. True States
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+psi_hat_deg  = (180/pi) * simdata(:, 16);   % Estimated yaw angle (deg)
+r_hat_deg    = (180/pi) * simdata(:, 17);   % Estimated yaw rate (deg/s)
+bias_hat_deg = (180/pi) * simdata(:, 18);   % Estimated rudder bias (deg)
+
+figure(7);
+clf;
+
+% Subplot 1: True vs. Estimated Yaw Angle
+subplot(3, 1, 1);
+plot(t, psi_deg, 'b', 'LineWidth', 1.5); hold on;
+plot(t, psi_hat_deg, 'r--', 'LineWidth', 1.5);
+grid on;
+xlabel('Time (s)');
+ylabel('Angle (deg)');
+title('Yaw Angle: True ($\psi$) vs. Kalman Filter Estimate ($\hat{\psi}$)', 'Interpreter', 'latex');
+legend('$\psi$ (true)', '$\hat{\psi}$ (estimated)', 'Interpreter', 'latex', 'Location', 'best');
+
+% Subplot 2: True vs. Estimated Yaw Rate
+subplot(3, 1, 2);
+plot(t, r_hat_deg, 'r', 'LineWidth', 1.5); hold on;
+plot(t, r_deg, 'b', 'LineWidth', 1.5);
+grid on;
+xlabel('Time (s)');
+ylabel('Yaw Rate (deg/s)');
+title('Yaw Rate: True ($r$) vs. Kalman Filter Estimate ($\hat{r}$)', 'Interpreter', 'latex');
+legend('$\hat{r}$ (estimated)', '$r$ (true)', 'Interpreter', 'latex', 'Location', 'best');
+
+% Subplot 3: Estimated Rudder Bias
+subplot(3, 1, 3);
+plot(t, bias_hat_deg, 'k', 'LineWidth', 1.5);
+grid on;
+xlabel('Time (s)');
+ylabel('Bias (deg)');
+title('Estimated Rudder Bias ($\hat{b}$)', 'Interpreter', 'latex');
+legend('$\hat{b}$ (estimated)', 'Interpreter', 'latex', 'Location', 'best');
