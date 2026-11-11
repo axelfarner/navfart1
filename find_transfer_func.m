@@ -7,7 +7,7 @@ T = 8.9;                % draft (m)
 KT = 0.7;               % propeller coefficient (-)
 Dia = 3.3;              % propeller diameter (m)
 rho = 1025;             % density of water (m/s^3)
-U_ref   = 7;            % desired surge speed (m/s)
+U_ref   = 9;            % desired surge speed (m/s)
 
 % rudder coefficients
 b = 2;
@@ -57,4 +57,14 @@ C = [0 1]
 Dd = 0;
 [num, denom] = ss2tf(A,B,C,Dd);
 
-s = tf(num, denom); 
+s = tf(num, denom);
+
+p = pole(s);
+z = zero(s);
+T1 = -1/p(1);
+T2 = -1/p(2);
+T3 = -1/z(1);
+T = T1 + T2 - T3;
+K = dcgain(s);
+
+nomoto1 = tf(K, [T, 1])
