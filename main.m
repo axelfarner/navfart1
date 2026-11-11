@@ -10,7 +10,7 @@ addpath(genpath('flypath3d_v3'))
 % USER INPUTS
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 clc; clear; close all;
-T_final = 7000;	        % Final simulation time (s)
+T_final = 6800;	        % Final simulation time (s)
 h = .1;                % Sampling time (s)
 
 
@@ -31,9 +31,10 @@ x = [nu_0' eta_0' delta_0 n_0, Qm_0]'; % The state vector can be extended with a
 t = 0:h:T_final;                % Time vector
 nTimeSteps = length(t);         % Number of time steps
 
-simdata = zeros(nTimeSteps, 14); % Pre-allocate matrix for efficiency
+simdata = zeros(nTimeSteps, 15); % Pre-allocate matrix for efficiency
 
 e_int = 0; % integral term of error in yaw
+y_int = 0; %integral term of error in course
 xd = [x(6) x(3) 0]'; % initialize desired yaw and yawrate to be same as starting position
 
 % compute Ki to use for anti integrator windup term
@@ -58,7 +59,7 @@ B = [zeros(n-1, 1); num(end)];
 
 % ref model returns the first order approx of the increment xd, xd_dot
 ref_model = @(xd, r) (A * xd + B * r) *h;
-
+xk_prev = 0;
 showPlot = false;
 for i = 1:nTimeSteps
     
@@ -110,17 +111,38 @@ for i = 1:nTimeSteps
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%ee
     % Guidance law
     [xk1,yk1,xk,yk,last] = WP_selector(x(4),x(5));
-    
-    [e_y,pi_h] = crossTrackError(xk1,yk1,xk,yk,x(4),x(5),showPlot);
-    chi_d = guidance(e_y,pi_h);
-    crab_angle = atan2(x(2), x(1));      % crab angle
-    if x(1) > 0.7 * U_ref % check that the boat is at about cruise speed to ensure crab angle well defined
-        heading_d = chi_d - crab_angle;
-    else
-        heading_d = chi_d;
+
+    % --- Reset ILOS integrator on new waypoint leg ---
+    if xk ~= xk_prev
+        y_int = 0;          % Reset integrator when entering new leg
+        xk_prev = xk;
     end
+    % -------------------------------------------------
+    [e_y,pi_h] = crossTrackError(xk1,yk1,xk,yk,x(4),x(5),showPlot);
     
+
+    %%%%%%%%%%%%%%%%%%%%%%
+    % 2 c
+    %%%%%%%%%%%%%%%%%%%%%%
+%     chi_d = guidance(e_y,pi_h); 
+%     crab_angle = atan2(x(2), x(1));      % crab angle
+%     if x(1) > 0.7 * U_ref % check that the boat is at about cruise speed to ensure crab angle well defined
+%         heading_d = chi_d - crab_angle;
+%     else
+%         heading_d = chi_d;
+%     end
+    
+    %%%%%%%%%%%%%%%%&&&&
+    % 2 d
+    %%%%%%%%%%%%%%%%%&&&
+    [chi_d, dy]= guidance_integrator(e_y,pi_h,h,y_int);
+    y_int = y_int + dy;
+    heading_d = chi_d;
+
+    %%%%%%%%%%%%%%%%%%%%
     % Reference models
+    %%%%%%%%%%%%%%%%%%%%
+
     xd_dot = ref_model(xd,heading_d);
     xd = xd + xd_dot;
 
@@ -128,6 +150,7 @@ for i = 1:nTimeSteps
     r_d = xd(2);
     u_d = U_ref;
     
+
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     % Part 2, 2d) Add the heading controller here 
     % Define it as a function   
@@ -156,7 +179,7 @@ for i = 1:nTimeSteps
     [xdot,tau_total] = ship(x,u,nu_c,tau_wind);
     
     % store simulation data in a table (for testing)
-    simdata(i,:) = [x(1:3)' x(4:6)' x(7) x(8) u(1) u(2) u_d psi_d r_d chi_d];     
+    simdata(i,:) = [x(1:3)' x(4:6)' x(7) x(8) u(1) u(2) u_d psi_d r_d chi_d e_y];     
  
     % Euler integration
     % x = euler2(xdot,x,h); 
@@ -167,7 +190,9 @@ for i = 1:nTimeSteps
     if mod(i, floor(nTimeSteps / 10)) == 0 % Print an update every 10%
         progress = (i/nTimeSteps) * 100;
         fprintf('  %d%% complete\n', round(progress));
+        
     elseif i == 1
+        
         disp("  Simulation in progress:")
         fprintf('  %d%% complete\n', 0);
     end
@@ -283,11 +308,25 @@ chi_deg = (180/pi) * atan2(y_dot_n, x_dot_n);
 % Wrap angles to [-180, 180] deg to avoid vertical wrap jumps across +/-180
 wrap_deg = @(angle) mod(angle + 180, 360) - 180;
 
+%% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Problem 2: Course, Desired Course, Heading, Crab, Sideslip, and e_y
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+chi_d_deg = (180/pi) * simdata(:,14);
+e_y_log   = simdata(:,15);                  % Cross-track error (m)
+
+% Course over ground (chi = psi + beta_c)
+x_dot_n = u .* cos(psi) - v .* sin(psi);
+y_dot_n = u .* sin(psi) + v .* cos(psi);
+chi_deg = (180/pi) * atan2(y_dot_n, x_dot_n);
+
+% Wrap angles to [-180, 180] deg to avoid vertical wrap jumps across +/-180
+wrap_deg = @(angle) mod(angle + 180, 360) - 180;
+
 figure(5);
 clf;
 
 % Subplot 1: Course, Desired Course, and Heading/Yaw
-subplot(2, 1, 1);
+subplot(3, 1, 1);
 plot(t, wrap_deg(chi_deg), 'b', 'LineWidth', 1.5); hold on;
 plot(t, wrap_deg(chi_d_deg), 'r--', 'LineWidth', 1.5);
 plot(t, wrap_deg(psi_deg), 'k:', 'LineWidth', 1.5);
@@ -298,11 +337,21 @@ title('Course (\chi), Desired Course (\chi_d), and Heading/Yaw (\psi)');
 legend('\chi (course)', '\chi_d (desired course)', '\psi (heading / yaw)', 'Location', 'best');
 
 % Subplot 2: Crab and Sideslip Angles
-subplot(2, 1, 2);
-plot(t, beta_c_deg, 'LineWidth', 1.5); hold on;
-plot(t, beta_deg, '--', 'LineWidth', 1.5);
+subplot(3, 1, 2);
+plot(t(100:end), beta_c_deg(100:end), 'LineWidth', 1.5); hold on;
+plot(t(100:end), beta_deg(100:end), '--', 'LineWidth', 1.5);
 grid on;
 xlabel('Time (s)');
 ylabel('Angle (deg)');
 title('Crab Angle (\beta_c) and Sideslip Angle (\beta)');
 legend('\beta_c (crab)', '\beta (sideslip)', 'Location', 'best');
+
+% Subplot 3: Cross-Track Error (e_y)
+subplot(3, 1, 3);
+plot(t, e_y_log, 'm', 'LineWidth', 1.5); hold on;
+yline(0, 'k--', 'LineWidth', 1); % Zero-error reference line
+grid on;
+xlabel('Time (s)');
+ylabel('Error (m)');
+title('Cross-Track Error (e_y)');
+legend('e_y', 'Zero Reference', 'Location', 'best');
