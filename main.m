@@ -10,15 +10,15 @@ addpath(genpath('flypath3d_v3'))
 % USER INPUTS
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 clc; clear; close all;
-T_final = 1500;	        % Final simulation time (s)
-h = 0.1;                % Sampling time (s)
+T_final = 7000;	        % Final simulation time (s)
+h = .1;                % Sampling time (s)
 
 
 U_ref   = 9;            % desired surge speed (m/s)
 print = true;
 
 % initial states
-eta_0 = [0 0 0]';
+eta_0 = [0 0 (-110 * pi / 180)]';
 nu_0  = [0 0 0]';
 delta_0 = 0;
 n_0 = 0;
@@ -37,10 +37,10 @@ e_int = 0; % integral term of error in yaw
 xd = [x(6) x(3) 0]'; % initialize desired yaw and yawrate to be same as starting position
 
 % compute Ki to use for anti integrator windup term
-wb = 0.06;
+wb = 0.02;
 zeta = 1;
 wn = wb / sqrt(1 - 2*zeta + sqrt(4*zeta^4 - 4*zeta^2 + 2));
-T = 269.56;
+T = 169.56;
 K = 0.0075;
 Ki = wn ^3 * T / (10 * K);
 
@@ -59,6 +59,7 @@ B = [zeros(n-1, 1); num(end)];
 % ref model returns the first order approx of the increment xd, xd_dot
 ref_model = @(xd, r) (A * xd + B * r) *h;
 
+showPlot = false;
 for i = 1:nTimeSteps
     
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -105,10 +106,16 @@ for i = 1:nTimeSteps
     tau_wind = [0 Ywind Nwind]';
     
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    % Part 2, 2d) Add a reference model here 
-    % Define it as a function
-    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-    xd_dot = ref_model(xd, psi_ref(i));
+    % Guidance model annd 
+    %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%ee
+    % Guidance law
+    [xk1,yk1,xk,yk,last] = WP_selector(x(4),x(5));
+    
+    [e_y,pi_h] = crossTrackError(xk1,yk1,xk,yk,x(4),x(5),showPlot);
+    chi_d = guidance(e_y,pi_h);
+    heading_d = chi_d;
+    % Reference models
+    xd_dot = ref_model(xd,heading_d);
     xd = xd + xd_dot;
 
     psi_d = xd(1);
@@ -117,7 +124,7 @@ for i = 1:nTimeSteps
     
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     % Part 2, 2d) Add the heading controller here 
-    % Define it as a function
+    % Define it as a function   
     
     % to prevent integrator windup, stop integrating when integral term alone puts you over rudder limitations
     integrator_increment = h * (psi_d- x(6));
@@ -138,11 +145,6 @@ for i = 1:nTimeSteps
     % n_c = open_loop_speed_control(U_ref);
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     n_c = open_loop_speed_control(U_ref);                   % propeller speed [radians per second (rps)]
-    if print
-        n_c
-        print = false;
-    end
-    delta_c = 0;
     % ship dynamics
     u = [delta_c n_c]';
     [xdot,tau_total] = ship(x,u,nu_c,tau_wind);
@@ -163,7 +165,9 @@ for i = 1:nTimeSteps
         disp("  Simulation in progress:")
         fprintf('  %d%% complete\n', 0);
     end
-
+    if last
+        break
+    end
 end
 simdata = simdata(1:i,:);
 t = t(1:i);
@@ -187,6 +191,7 @@ psi_d       = simdata(:,12);                % rad
 psi_d_deg   = (180/pi) * psi_d;             % deg
 r_d         =  simdata(:,13);               % rad/s
 r_d_deg     = (180/pi) * r_d;               % deg/s
+pathplotter(x,y);
 %%
 figure(3)
 figure(gcf)
@@ -223,7 +228,8 @@ z = zeros(length(x),1);
 phi = zeros(length(psi),1);
 theta = zeros(length(psi),1);
 
-% create object 1: ship (ship1.mat)
+
+% % create object 1: ship (ship1.mat)
 new_object('flypath3d_v3/ship1.mat',[x,y,z,phi,theta,psi],...
 'model','royalNavy2.mat','scale',(max(max(abs(x)),max(abs(y)))/1000),...
 'edge',[0 0 0],'face',[0 0 0],'alpha',1,...
