@@ -13,12 +13,21 @@ clc; clear; close all;
 T_final = 6800;	        % Final simulation time (s)
 h = .1;                % Sampling time (s)
 
-Rd = (.5 * pi / 180)^2; % measurement noise
-qr = 1e-5;
-qb = 1e-3;
-Qd = diag([qr, qb]);
-x_hat = [(-110 * pi / 180) 0 0]';
-P_hat = diag([.1,.01,.1]);
+mu = deg2rad(63.43);  h_pos = 0.2;  t_slow = 0;  T_acc = 300;  T_ars = 300;
+x_ins = [0 0 0, 0 0 0, 0 0 0, 0 0 -110*pi/180, 0 0 0]';   % p, v, b_acc, theta, b_ars
+P_prd = eye(15);
+Qd = diag([0.1 0.1 0 0.001 0.001 0 0 0 0.1 0 0 0.001]);
+Rd = diag([0.1 0.1 0.1 1 1 1 0.01]);
+delta_c = 0;  
+n_c = 0;
+
+sigma_accel       = 0.001;          % m/s^2
+sigma_gyro        = 0.0000175;      % rad/s
+sigma_gps_pos     = 0.025;          % m
+sigma_compass_psi = deg2rad(0.5);   % rad
+b_acc_true = [0.01 0.01 0]';          % accelerometer bias, ~1 mg on horizontal axes (m/s^2)
+b_ars_true = [0 0 deg2rad(0.01)]';    % gyro bias, 0.01 deg/s = 36 deg/h (rad/s)
+
 
 U_ref   = 9;            % desired surge speed (m/s)
 print = true;
@@ -35,15 +44,18 @@ x = [nu_0' eta_0' delta_0 n_0, Qm_0]'; % The state vector can be extended with a
 % MAIN LOOP
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-[Ad, Bd, Ed, Cd] = get_discrete_matrices();
+% [Ad, Bd, Ed, Cd] = get_discrete_matrices();
 
 t = 0:h:T_final;                % Time vector
 nTimeSteps = length(t);         % Number of time steps
 
-simdata = zeros(nTimeSteps, 18); % Pre-allocate matrix for efficiency
+simdata = zeros(nTimeSteps, 21); % Pre-allocate matrix for efficiency
 rng(27); % seed the noise
+%{
+% Problem 4 noise (needs Statistics and Machine Learning Toolbox for normrnd)
 noise = [normrnd(0,.5,nTimeSteps,1), normrnd(0,.1,nTimeSteps,1)];
 noise = noise * (pi / 180); % convert noise to radians
+%}
 
 e_int = 0; % integral term of error in yaw
 y_int = 0; %integral term of error in course
@@ -166,9 +178,29 @@ for i = 1:nTimeSteps
     %%%%%%%%%%%%%%%%%%%%%%%
 
     % predict the current state of x
-    if i > 1
-        [x_hat, P_hat] = KF(x_hat, P_hat, x(6) + noise(i,1),delta_c,Ad,Bd,Cd,Ed,Qd,Rd);
+    %if i > 1
+    %    [x_hat, P_hat] = KF(x_hat, P_hat, x(6) + noise(i,1),delta_c,Ad,Bd,Cd,Ed,Qd,Rd);
+    %end
+
+    xdot_true = ship(x,[delta_c n_c]',nu_c,tau_wind);
+    u_s=x(1); v_s=x(2); r_s=x(3);
+    f_true = [xdot_true(1) - r_s*v_s;  xdot_true(2) + r_s*u_s;  -gravity(mu)];  % body, phi=theta=0
+    w_true = [0 0 r_s]';
+    f_imu = f_true + b_acc_true + sigma_accel*randn(3,1);
+    w_imu = w_true + b_ars_true + sigma_gyro*randn(3,1);
+    y_psi = x(6) + sigma_compass_psi*randn;
+
+    if t(i) >= t_slow
+        y_pos = [x(4); x(5); 0] + sigma_gps_pos*randn(3,1);
+        [x_ins,P_prd] = ins_euler(x_ins,P_prd,mu,h,Qd,Rd,T_acc,T_ars,[f_imu; w_imu],y_psi,y_pos);
+        t_slow = t_slow + h_pos;
+    else
+        [x_ins,P_prd] = ins_euler(x_ins,P_prd,mu,h,Qd,Rd,T_acc,T_ars,[f_imu; w_imu],y_psi);
     end
+    psi_hat = x_ins(12);
+    r_hat   = w_imu(3) - x_ins(15);   % the ESKF has no r state: use the bias-corrected gyro
+
+
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     % Part 2, 2d) Add the heading controller here 
     % Define it as a function   
@@ -178,8 +210,8 @@ for i = 1:nTimeSteps
     if abs(1.1 * (e_int + integrator_increment) * Ki) < 40 * pi/180
         e_int = e_int + integrator_increment;
     end
-    e_r = r_d - x_hat(2);
-    e_psi = psi_d - x_hat(1);
+    e_r = r_d - r_hat;
+    e_psi = ssa(psi_d - psi_hat);
 
     delta_c = PID_heading(e_psi,e_r,e_int);
     %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -197,7 +229,7 @@ for i = 1:nTimeSteps
     [xdot,tau_total] = ship(x,u,nu_c,tau_wind);
     
     % store simulation data in a table (for testing)
-    simdata(i,:) = [x(1:3)' x(4:6)' x(7) x(8) u(1) u(2) u_d psi_d r_d chi_d e_y x_hat'];     
+    simdata(i,:) = [x(1:3)' x(4:6)' x(7) x(8) u(1) u(2) u_d psi_d r_d chi_d e_y psi_hat r_hat x_ins(15) x_ins(7:9)'];
  
     % Euler integration
     % x = euler2(xdot,x,h); 
@@ -220,6 +252,7 @@ for i = 1:nTimeSteps
 end
 simdata = simdata(1:i,:);
 t = t(1:i);
+save('simdata_ESKF.mat','simdata')
 %% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % PLOTS
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -248,13 +281,15 @@ subplot(311)
 plot(y,x,'linewidth',2); axis('equal')
 title('North-East positions'); xlabel('(m)'); ylabel('(m)'); 
 subplot(312)
-plot(t,psi_deg,t,psi_d_deg,'linewidth',2);
-title('Actual and desired yaw angle'); xlabel('Time (s)');  ylabel('Angle (deg)'); 
-legend('actual yaw','desired yaw')
+plot(t,psi_deg,t,psi_d_deg,'linewidth',2); hold on;
+plot(t,(180/pi)*simdata(:,16),'--','linewidth',1.5); hold off;   % ESKF estimate psi_hat
+title('Desired, actual and estimated yaw angle'); xlabel('Time (s)');  ylabel('Angle (deg)');
+legend('actual yaw','desired yaw','estimated yaw (ESKF)')
 subplot(313)
-plot(t,r_deg,t,r_d_deg,'linewidth',2);
-title('Actual and desired yaw rates'); xlabel('Time (s)');  ylabel('Angle rate (deg/s)'); 
-legend('actual yaw rate','desired yaw rate')
+plot(t,r_deg,t,r_d_deg,'linewidth',2); hold on;
+plot(t,(180/pi)*simdata(:,17),'--','linewidth',1.5); hold off;   % ESKF estimate r_hat
+title('Desired, actual and estimated yaw rates'); xlabel('Time (s)');  ylabel('Angle rate (deg/s)');
+legend('actual yaw rate','desired yaw rate','estimated yaw rate (ESKF)')
 
 figure(2)
 figure(gcf)
@@ -377,6 +412,7 @@ legend('e_y', 'Zero Reference', 'Location', 'best');
 %% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Problem 4(a): True vs. Noisy Yaw Angle and Yaw Rate
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%{
 % Truncate pre-generated noise to match actual simulation length
 noise_used = noise(1:length(t), :);
 
@@ -406,42 +442,57 @@ xlabel('Time (s)');
 ylabel('Yaw Rate (deg/s)');
 title('Yaw Rate (r): True State vs. Noisy Measurement');
 legend('r_{meas} (noisy)', 'r (true)', 'Location', 'best');
+%}
 
 %% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% Problem 4(b): Kalman Filter State Estimates vs. True States
+% Problem 6(b): ESKF State Estimates vs. True States
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-psi_hat_deg  = (180/pi) * simdata(:, 16);   % Estimated yaw angle (deg)
-r_hat_deg    = (180/pi) * simdata(:, 17);   % Estimated yaw rate (deg/s)
-bias_hat_deg = (180/pi) * simdata(:, 18);   % Estimated rudder bias (deg)
+psi_hat_deg     = (180/pi) * simdata(:, 16);   % Estimated yaw angle (deg)
+r_hat_deg       = (180/pi) * simdata(:, 17);   % Estimated yaw rate (deg/s)
+b_ars_hat_deg   = (180/pi) * simdata(:, 18);   % Estimated z-gyro bias (deg/s)
+b_acc_hat       = simdata(:, 19:21);           % Estimated accelerometer bias (m/s^2)
 
 figure(7);
 clf;
 
 % Subplot 1: True vs. Estimated Yaw Angle
-subplot(3, 1, 1);
+subplot(4, 1, 1);
 plot(t, psi_deg, 'b', 'LineWidth', 1.5); hold on;
 plot(t, psi_hat_deg, 'r--', 'LineWidth', 1.5);
 grid on;
 xlabel('Time (s)');
 ylabel('Angle (deg)');
-title('Yaw Angle: True ($\psi$) vs. Kalman Filter Estimate ($\hat{\psi}$)', 'Interpreter', 'latex');
+title('Yaw Angle: True ($\psi$) vs. ESKF Estimate ($\hat{\psi}$)', 'Interpreter', 'latex');
 legend('$\psi$ (true)', '$\hat{\psi}$ (estimated)', 'Interpreter', 'latex', 'Location', 'best');
 
 % Subplot 2: True vs. Estimated Yaw Rate
-subplot(3, 1, 2);
+subplot(4, 1, 2);
 plot(t, r_hat_deg, 'r', 'LineWidth', 1.5); hold on;
 plot(t, r_deg, 'b', 'LineWidth', 1.5);
 grid on;
 xlabel('Time (s)');
 ylabel('Yaw Rate (deg/s)');
-title('Yaw Rate: True ($r$) vs. Kalman Filter Estimate ($\hat{r}$)', 'Interpreter', 'latex');
+title('Yaw Rate: True ($r$) vs. ESKF Estimate ($\hat{r}$)', 'Interpreter', 'latex');
 legend('$\hat{r}$ (estimated)', '$r$ (true)', 'Interpreter', 'latex', 'Location', 'best');
 
-% Subplot 3: Estimated Rudder Bias
-subplot(3, 1, 3);
-plot(t, bias_hat_deg, 'k', 'LineWidth', 1.5);
+% Subplot 3: Gyro (ARS) Bias, z-axis
+subplot(4, 1, 3);
+plot(t, b_ars_hat_deg, 'k', 'LineWidth', 1.5); hold on;
+yline((180/pi) * b_ars_true(3), 'r--', 'LineWidth', 1.5);
 grid on;
 xlabel('Time (s)');
-ylabel('Bias (deg)');
-title('Estimated Rudder Bias ($\hat{b}$)', 'Interpreter', 'latex');
-legend('$\hat{b}$ (estimated)', 'Interpreter', 'latex', 'Location', 'best');
+ylabel('Bias (deg/s)');
+title('Gyro Bias: True ($b_{ars,z}$) vs. ESKF Estimate ($\hat{b}_{ars,z}$)', 'Interpreter', 'latex');
+legend('$\hat{b}_{ars,z}$ (estimated)', '$b_{ars,z}$ (true)', 'Interpreter', 'latex', 'Location', 'best');
+
+% Subplot 4: Accelerometer Bias
+subplot(4, 1, 4);
+plot(t, b_acc_hat(:,1), 'b', t, b_acc_hat(:,2), 'g', t, b_acc_hat(:,3), 'k', 'LineWidth', 1.5); hold on;
+yline(b_acc_true(1), 'b--', 'LineWidth', 1);
+yline(b_acc_true(2), 'g--', 'LineWidth', 1);
+yline(b_acc_true(3), 'k--', 'LineWidth', 1);
+grid on;
+xlabel('Time (s)');
+ylabel('Bias (m/s$^2$)', 'Interpreter', 'latex');
+title('Accelerometer Bias: True (dashed) vs. ESKF Estimate (solid)', 'Interpreter', 'latex');
+legend('$\hat{b}_{acc,x}$', '$\hat{b}_{acc,y}$', '$\hat{b}_{acc,z}$', 'Interpreter', 'latex', 'Location', 'best');
